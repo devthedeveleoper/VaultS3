@@ -144,8 +144,18 @@ export default function Home() {
 
       if (!uploadId || createError) throw new Error(createError || "Failed to initialize upload");
 
-      // 2. Upload chunks via Next.js backend proxy in parallel batches
+      // 2. Fetch Presigned URLs for all chunks
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+      const partNumbers = Array.from({ length: totalChunks }, (_, i) => i + 1);
+
+      const urlsRes = await fetch("/api/upload/multipart/urls", {
+        method: "POST",
+        body: JSON.stringify({ key, uploadId, parts: partNumbers }),
+        headers: { "Content-Type": "application/json" },
+      });
+      const { urls, error: urlsError } = await urlsRes.json();
+      if (urlsError) throw new Error(urlsError || "Failed to generate upload URLs");
+
       const uploadedParts: { partNumber: number; eTag: string }[] = [];
       let uploadedBytes = 0;
       const BATCH_SIZE = 4; // Upload 4 chunks concurrently
@@ -159,28 +169,26 @@ export default function Home() {
           const end = Math.min(start + CHUNK_SIZE, file.size);
           const chunk = file.slice(start, end);
           const partNumber = chunkIndex + 1;
+          const presignedUrl = urls.find((u: any) => u.partNumber === partNumber)?.url;
+
+          if (!presignedUrl) throw new Error(`Missing presigned URL for part ${partNumber}`);
 
           batch.push(
             (async () => {
-              const formData = new FormData();
-              formData.append("key", key);
-              formData.append("uploadId", uploadId);
-              formData.append("partNumber", partNumber.toString());
-              formData.append("chunk", chunk);
-
-              const uploadRes = await fetch("/api/upload/multipart/chunk", {
-                method: "POST",
-                body: formData,
+              const uploadRes = await fetch(presignedUrl, {
+                method: "PUT",
+                body: chunk,
               });
 
               if (!uploadRes.ok) throw new Error(`Failed to upload part ${partNumber}`);
 
-              const data = await uploadRes.json();
-              
+              const eTag = uploadRes.headers.get("ETag") || uploadRes.headers.get("etag");
+              if (!eTag) throw new Error(`No ETag returned for part ${partNumber}. You MUST configure your Minio/S3 CORS policy to ExposeHeaders: ["ETag"]`);
+
               uploadedBytes += chunk.size;
               setUploadProgress((prev) => ({ ...prev, [filename]: Math.round((uploadedBytes / file.size) * 100) }));
 
-              return { partNumber, eTag: data.eTag };
+              return { partNumber, eTag: eTag.replace(/"/g, "") }; // S3 sometimes wraps ETags in quotes
             })()
           );
         }
@@ -216,7 +224,7 @@ export default function Home() {
         delete newProgress[filename];
         return newProgress;
       });
-      alert(`Upload failed: ${error.message}\n(Make sure your bucket allows CORS headers with ExposeHeaders: ETag).`);
+      alert(`Upload failed: ${error.message}`);
     }
   };
 
