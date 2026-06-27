@@ -3,8 +3,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { format } from "date-fns";
 import { partial } from "filesize";
-import { UploadCloud, File, Trash2, Download, Loader2, Pencil, Check, X, Eye, Share2, Search, LogOut, Folder, FolderPlus, ChevronRight, LayoutGrid, List } from "lucide-react";
+import { UploadCloud, File, Trash2, Download, Loader2, Pencil, Check, X, Eye, Share2, Search, LogOut, Folder, FolderPlus, ChevronRight, LayoutGrid, List, FolderOutput } from "lucide-react";
 import { useRouter } from "next/navigation";
+import Editor from "@monaco-editor/react";
 
 const sizeFormatter = partial({ standard: "jedec" });
 
@@ -36,7 +37,19 @@ export default function Home() {
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewType, setPreviewType] = useState<"image" | "video" | "pdf" | "unsupported" | null>(null);
+  const [previewType, setPreviewType] = useState<"image" | "video" | "pdf" | "code" | "unsupported" | null>(null);
+  const [previewContent, setPreviewContent] = useState("");
+  const [previewKey, setPreviewKey] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [sharingKey, setSharingKey] = useState<string | null>(null);
+  const [shareExpiration, setShareExpiration] = useState<number>(7 * 24 * 3600);
+  const [generatedShareUrl, setGeneratedShareUrl] = useState<string | null>(null);
+  const [isGeneratingShare, setIsGeneratingShare] = useState(false);
+  const [movingKeys, setMovingKeys] = useState<string[]>([]);
+  const [allFolders, setAllFolders] = useState<string[]>([]);
+  const [selectedDestination, setSelectedDestination] = useState<string>("");
+  const [isMoving, setIsMoving] = useState(false);
+  const [draggedFileKey, setDraggedFileKey] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<"newest" | "oldest" | "largest" | "smallest">("newest");
@@ -351,6 +364,55 @@ export default function Home() {
     }
   };
 
+  const fetchAllFolders = async () => {
+    try {
+      const res = await fetch("/api/folders/all");
+      const data = await res.json();
+      setAllFolders(data.folders || []);
+    } catch (error) {
+      console.error("Failed to fetch all folders", error);
+    }
+  };
+
+  const openMoveModal = (keys: string[]) => {
+    setMovingKeys(keys);
+    setSelectedDestination("");
+    fetchAllFolders();
+  };
+
+  const moveFiles = async (keys: string[], destinationPrefix: string) => {
+    setIsMoving(true);
+    
+    const fileKeys = keys.filter(k => !k.endsWith("/"));
+    const prefixKeys = keys.filter(k => k.endsWith("/"));
+
+    // Optimistic Update
+    setFiles((prev) => prev.filter(f => !fileKeys.includes(f.key)));
+    setFolders((prev) => prev.filter(f => !prefixKeys.includes(f.name)));
+
+    try {
+      const res = await fetch("/api/bulk/move", {
+        method: "POST",
+        body: JSON.stringify({ keys: fileKeys, prefixes: prefixKeys, destinationPrefix }),
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) throw new Error("Failed to move");
+      
+      setToastMessage(`Moved ${keys.length} items successfully!`);
+      setTimeout(() => setToastMessage(null), 3000);
+      setMovingKeys([]);
+      setSelectedItems(new Set());
+      fetchFiles();
+    } catch (error) {
+      console.error(error);
+      setToastMessage("Failed to move items");
+      setTimeout(() => setToastMessage(null), 3000);
+      fetchFiles(); // Revert
+    } finally {
+      setIsMoving(false);
+    }
+  };
+
   const deleteFile = async (key: string) => {
     if (!confirm("Are you sure you want to delete this file?")) return;
 
@@ -375,38 +437,86 @@ export default function Home() {
     }
   };
 
-  const previewFile = async (key: string) => {
+  const saveFileContent = async () => {
+    if (!previewKey) return;
+    setIsSaving(true);
     try {
-      const res = await fetch(`/api/download?key=${encodeURIComponent(key)}`);
-      const { url } = await res.json();
-      if (url) {
-        const ext = key.split('.').pop()?.toLowerCase();
-        let type: "image" | "video" | "pdf" | "unsupported" = "unsupported";
-        if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext || '')) type = "image";
-        else if (['mp4', 'webm', 'ogg', 'mkv'].includes(ext || '')) type = "video";
-        else if (ext === 'pdf') type = "pdf";
-
-        setPreviewType(type);
-        setPreviewUrl(url);
-      }
+      const res = await fetch("/api/file/raw", {
+        method: "POST",
+        body: JSON.stringify({ key: previewKey, content: previewContent }),
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) throw new Error("Failed to save");
+      setToastMessage("File saved successfully!");
+      setTimeout(() => setToastMessage(null), 3000);
     } catch (error) {
-      console.error("Failed to generate preview url", error);
+      console.error(error);
+      alert("Failed to save file");
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const shareFile = async (key: string) => {
+  const previewFile = async (key: string) => {
     try {
-      const res = await fetch(`/api/share?key=${encodeURIComponent(key)}`);
+      const ext = key.split('.').pop()?.toLowerCase();
+      let type: "image" | "video" | "pdf" | "code" | "unsupported" = "unsupported";
+      
+      if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext || '')) type = "image";
+      else if (['mp4', 'webm', 'ogg', 'mkv'].includes(ext || '')) type = "video";
+      else if (ext === 'pdf') type = "pdf";
+      else if (['txt', 'md', 'json', 'js', 'ts', 'jsx', 'tsx', 'css', 'html', 'csv', 'yaml', 'yml'].includes(ext || '')) type = "code";
+
+      setPreviewType(type);
+      setPreviewKey(key);
+
+      if (type === "code") {
+        setPreviewUrl("dummy");
+        const res = await fetch(`/api/file/raw?key=${encodeURIComponent(key)}`);
+        const text = await res.text();
+        setPreviewContent(text);
+      } else {
+        const res = await fetch(`/api/download?key=${encodeURIComponent(key)}`);
+        const { url } = await res.json();
+        if (url) setPreviewUrl(url);
+      }
+    } catch (error) {
+      console.error("Failed to preview file", error);
+    }
+  };
+
+  const shareFile = (key: string) => {
+    setSharingKey(key);
+    setGeneratedShareUrl(null);
+    setShareExpiration(7 * 24 * 3600);
+  };
+
+  const generateShareLink = async () => {
+    if (!sharingKey) return;
+    setIsGeneratingShare(true);
+    try {
+      const res = await fetch(`/api/share?key=${encodeURIComponent(sharingKey)}&expiresIn=${shareExpiration}`);
       const { url } = await res.json();
       if (url) {
-        await navigator.clipboard.writeText(url);
-        setToastMessage("Link copied to clipboard!");
-        setTimeout(() => setToastMessage(null), 3000);
+        setGeneratedShareUrl(url);
       }
     } catch (error) {
       console.error("Failed to generate share link", error);
-      setToastMessage("Failed to copy link");
+      setToastMessage("Failed to generate link");
       setTimeout(() => setToastMessage(null), 3000);
+    } finally {
+      setIsGeneratingShare(false);
+    }
+  };
+
+  const copyShareLink = async () => {
+    if (!generatedShareUrl) return;
+    try {
+      await navigator.clipboard.writeText(generatedShareUrl);
+      setToastMessage("Link copied to clipboard!");
+      setTimeout(() => setToastMessage(null), 3000);
+    } catch (error) {
+      console.error("Failed to copy", error);
     }
   };
 
@@ -642,6 +752,28 @@ export default function Home() {
               {filteredFolders.map((folder) => (
                 <div 
                   key={folder.name} 
+                  onDragOver={(e) => {
+                    if (e.dataTransfer.types.includes("application/x-vaults3-file")) {
+                      e.preventDefault();
+                      e.currentTarget.classList.add('ring-4', 'ring-blue-500', 'bg-blue-500/20');
+                    }
+                  }}
+                  onDragLeave={(e) => {
+                    e.currentTarget.classList.remove('ring-4', 'ring-blue-500', 'bg-blue-500/20');
+                  }}
+                  onDrop={(e) => {
+                    e.currentTarget.classList.remove('ring-4', 'ring-blue-500', 'bg-blue-500/20');
+                    const key = e.dataTransfer.getData("application/x-vaults3-file");
+                    if (key) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (selectedItems.has(key)) {
+                        moveFiles(Array.from(selectedItems), folder.name);
+                      } else {
+                        moveFiles([key], folder.name);
+                      }
+                    }
+                  }}
                   className={`glass group transition-all cursor-pointer relative overflow-hidden ${viewMode === "grid" ? "rounded-2xl p-6 flex flex-col justify-between h-48 hover:scale-[1.02]" : "rounded-xl p-3 sm:p-4 flex flex-wrap sm:flex-nowrap items-center gap-4 hover:bg-slate-800/50"} ${selectedItems.has(folder.name) ? 'ring-2 ring-blue-500 bg-blue-500/10' : ''}`} 
                   onClick={() => setCurrentPath(folder.name)}
                 >
@@ -690,7 +822,13 @@ export default function Home() {
               {sortedAndFilteredFiles.map((file) => (
                 <div 
                   key={file.key} 
-                  className={`glass group transition-all relative overflow-hidden ${viewMode === "grid" ? "rounded-2xl p-6 flex flex-col justify-between h-48 hover:scale-[1.02]" : "rounded-xl p-3 sm:p-4 flex flex-wrap sm:flex-nowrap items-center gap-4 hover:bg-slate-800/50"} ${selectedItems.has(file.key) ? 'ring-2 ring-blue-500 bg-blue-500/10' : ''}`}
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData("application/x-vaults3-file", file.key);
+                    setDraggedFileKey(file.key);
+                  }}
+                  onDragEnd={() => setDraggedFileKey(null)}
+                  className={`glass group transition-all relative overflow-hidden ${viewMode === "grid" ? "rounded-2xl p-6 flex flex-col justify-between h-48 hover:scale-[1.02]" : "rounded-xl p-3 sm:p-4 flex flex-wrap sm:flex-nowrap items-center gap-4 hover:bg-slate-800/50"} ${selectedItems.has(file.key) ? 'ring-2 ring-blue-500 bg-blue-500/10' : ''} ${draggedFileKey === file.key ? 'opacity-50' : ''}`}
                 >
                   <div className={viewMode === "grid" ? "" : "flex items-center gap-4 flex-1 min-w-0"}>
                     {viewMode === "grid" && (
@@ -742,6 +880,9 @@ export default function Home() {
                     <button onClick={() => { setEditingKey(file.key); setEditName(getCleanFileName(file.key).split("/").pop() || ""); }} className={viewMode === "grid" ? "p-2 bg-purple-500/20 hover:bg-purple-500/40 text-purple-300 rounded-full" : "p-1.5 bg-purple-500/20 hover:bg-purple-500/40 text-purple-300 rounded-md"} title="Rename">
                       <Pencil className="w-4 h-4" />
                     </button>
+                    <button onClick={() => openMoveModal([file.key])} className={viewMode === "grid" ? "p-2 bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 rounded-full" : "p-1.5 bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 rounded-md"} title="Move To">
+                      <FolderOutput className="w-4 h-4" />
+                    </button>
                     <button onClick={() => downloadFile(file.key)} className={viewMode === "grid" ? "p-2 bg-blue-500/20 hover:bg-blue-500/40 text-blue-300 rounded-full" : "p-1.5 bg-blue-500/20 hover:bg-blue-500/40 text-blue-300 rounded-md"} title="Download">
                       <Download className="w-4 h-4" />
                     </button>
@@ -767,6 +908,10 @@ export default function Home() {
               <Download className="w-4 h-4" />
               Download
             </button>
+            <button onClick={() => openMoveModal(Array.from(selectedItems))} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full font-medium transition-colors shadow-sm">
+              <FolderOutput className="w-4 h-4" />
+              Move
+            </button>
             <button onClick={bulkDelete} className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-full font-medium transition-colors shadow-sm">
               <Trash2 className="w-4 h-4" />
               Delete
@@ -774,6 +919,106 @@ export default function Home() {
             <button onClick={() => setSelectedItems(new Set())} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-full transition-colors" title="Clear selection">
               <X className="w-5 h-5" />
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Move Modal */}
+      {movingKeys.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setMovingKeys([])}>
+          <div className="relative glass p-8 rounded-3xl max-w-md w-full flex flex-col items-center" onClick={e => e.stopPropagation()}>
+            <button onClick={() => setMovingKeys([])} className="absolute top-4 right-4 p-2 bg-slate-800/50 hover:bg-slate-700 rounded-full text-white z-10 transition-colors">
+              <X className="w-5 h-5" />
+            </button>
+            <FolderOutput className="w-12 h-12 text-indigo-400 mb-4" />
+            <h3 className="text-xl font-semibold mb-2 text-center">Move {movingKeys.length > 1 ? `${movingKeys.length} items` : 'File'}</h3>
+            <p className="text-slate-400 text-sm mb-6 text-center max-w-xs truncate" title={movingKeys[0]}>
+              {movingKeys.length > 1 ? "Multiple items selected" : movingKeys[0].split('/').filter(Boolean).pop()}
+            </p>
+            
+            <div className="w-full flex flex-col gap-4">
+              <div>
+                <label className="block text-sm text-slate-300 mb-2">Destination Folder</label>
+                <select 
+                  value={selectedDestination} 
+                  onChange={e => setSelectedDestination(e.target.value)}
+                  className="w-full bg-slate-800/80 border border-slate-600 rounded-xl px-4 py-3 text-slate-200 outline-none focus:border-blue-500 transition-colors cursor-pointer"
+                >
+                  <option value="">(Root Directory)</option>
+                  {allFolders.map(folder => (
+                    <option key={folder} value={folder}>{folder}</option>
+                  ))}
+                </select>
+              </div>
+              <button 
+                onClick={() => moveFiles(movingKeys, selectedDestination)} 
+                disabled={isMoving}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl py-3 font-medium transition-colors mt-2 flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(79,70,229,0.3)]"
+              >
+                {isMoving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Check className="w-5 h-5" />}
+                Move Here
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Share Modal */}
+      {sharingKey && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setSharingKey(null)}>
+          <div className="relative glass p-8 rounded-3xl max-w-md w-full flex flex-col items-center" onClick={e => e.stopPropagation()}>
+            <button onClick={() => setSharingKey(null)} className="absolute top-4 right-4 p-2 bg-slate-800/50 hover:bg-slate-700 rounded-full text-white z-10 transition-colors">
+              <X className="w-5 h-5" />
+            </button>
+            <Share2 className="w-12 h-12 text-blue-400 mb-4" />
+            <h3 className="text-xl font-semibold mb-2 text-center">Share File</h3>
+            <p className="text-slate-400 text-sm mb-6 text-center max-w-xs truncate" title={sharingKey}>{sharingKey.split('/').pop()}</p>
+            
+            {!generatedShareUrl ? (
+              <div className="w-full flex flex-col gap-4">
+                <div>
+                  <label className="block text-sm text-slate-300 mb-2">Link Expiration</label>
+                  <select 
+                    value={shareExpiration} 
+                    onChange={e => setShareExpiration(Number(e.target.value))}
+                    className="w-full bg-slate-800/80 border border-slate-600 rounded-xl px-4 py-3 text-slate-200 outline-none focus:border-blue-500 transition-colors cursor-pointer"
+                  >
+                    <option value={3600}>1 Hour</option>
+                    <option value={43200}>12 Hours</option>
+                    <option value={86400}>1 Day</option>
+                    <option value={259200}>3 Days</option>
+                    <option value={604800}>7 Days</option>
+                  </select>
+                </div>
+                <button 
+                  onClick={generateShareLink} 
+                  disabled={isGeneratingShare}
+                  className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl py-3 font-medium transition-colors mt-2 flex items-center justify-center gap-2"
+                >
+                  {isGeneratingShare ? <Loader2 className="w-5 h-5 animate-spin" /> : <Share2 className="w-5 h-5" />}
+                  Generate Link
+                </button>
+              </div>
+            ) : (
+              <div className="w-full flex flex-col gap-4">
+                <div className="bg-slate-800/80 border border-slate-600 rounded-xl p-3 flex items-center gap-2">
+                  <input 
+                    type="text" 
+                    readOnly 
+                    value={generatedShareUrl} 
+                    className="bg-transparent border-none outline-none text-slate-300 text-sm w-full flex-1"
+                    onClick={e => (e.target as HTMLInputElement).select()}
+                  />
+                </div>
+                <button 
+                  onClick={copyShareLink} 
+                  className="w-full bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl py-3 font-medium transition-colors flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.3)]"
+                >
+                  <Check className="w-5 h-5" />
+                  Copy Link
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -792,6 +1037,31 @@ export default function Home() {
             {previewType === 'image' && <img src={previewUrl} alt="Preview" className="max-w-full max-h-[80vh] object-contain rounded-xl" />}
             {previewType === 'video' && <video src={previewUrl} controls className="max-w-full max-h-[80vh] rounded-xl outline-none" autoPlay />}
             {previewType === 'pdf' && <iframe src={previewUrl} className="w-full h-[80vh] rounded-xl bg-white border-0" />}
+            {previewType === 'code' && (
+              <div className="w-full h-[80vh] bg-[#1e1e1e] rounded-xl overflow-hidden flex flex-col">
+                <div className="flex justify-between items-center bg-slate-800 p-3 border-b border-slate-700">
+                  <span className="text-slate-300 font-mono text-sm">{previewKey?.split('/').pop()}</span>
+                  <button 
+                    onClick={saveFileContent}
+                    disabled={isSaving}
+                    className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded-md font-medium transition-colors text-sm flex items-center gap-2"
+                  >
+                    {isSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                    {isSaving ? "Saving..." : "Save"}
+                  </button>
+                </div>
+                <div className="flex-1">
+                  <Editor
+                    height="100%"
+                    theme="vs-dark"
+                    path={previewKey || undefined}
+                    value={previewContent}
+                    onChange={(value) => setPreviewContent(value || "")}
+                    options={{ minimap: { enabled: false }, fontSize: 14, wordWrap: "on" }}
+                  />
+                </div>
+              </div>
+            )}
             {previewType === 'unsupported' && (
               <div className="text-center p-12">
                 <File className="w-16 h-16 text-slate-400 mx-auto mb-4" />

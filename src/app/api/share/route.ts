@@ -7,9 +7,18 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const key = searchParams.get("key");
+    const expiresInParam = searchParams.get("expiresIn");
 
     if (!key) {
       return NextResponse.json({ error: "Key is required" }, { status: 400 });
+    }
+
+    let expiresIn = 7 * 24 * 3600; // default 7 days
+    if (expiresInParam) {
+      const parsed = parseInt(expiresInParam, 10);
+      if (!isNaN(parsed) && parsed > 0 && parsed <= 604800) {
+        expiresIn = parsed;
+      }
     }
 
     const command = new GetObjectCommand({
@@ -17,8 +26,8 @@ export async function GET(request: Request) {
       Key: key,
     });
     
-    // Generate a URL valid for 7 days
-    const url = await getSignedUrl(s3Client, command, { expiresIn: 7 * 24 * 3600 });
+    // Generate a URL valid for given seconds
+    const url = await getSignedUrl(s3Client, command, { expiresIn });
     return NextResponse.json({ url });
   } catch (error: any) {
     console.error("Error generating share URL:", error);
