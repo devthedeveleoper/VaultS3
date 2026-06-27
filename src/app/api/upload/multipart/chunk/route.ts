@@ -4,17 +4,16 @@ import { s3Client, bucketName } from "@/lib/s3Client";
 
 export async function POST(request: Request) {
   try {
-    const formData = await request.formData();
-    const key = formData.get("key") as string;
-    const uploadId = formData.get("uploadId") as string;
-    const partNumber = parseInt(formData.get("partNumber") as string);
-    const chunk = formData.get("chunk") as Blob;
+    const { searchParams } = new URL(request.url);
+    const key = searchParams.get("key");
+    const uploadId = searchParams.get("uploadId");
+    const partNumber = parseInt(searchParams.get("partNumber") || "0");
 
-    if (!key || !uploadId || !partNumber || !chunk) {
+    if (!key || !uploadId || !partNumber) {
       return NextResponse.json({ error: "Missing parameters" }, { status: 400 });
     }
 
-    const buffer = Buffer.from(await chunk.arrayBuffer());
+    const buffer = Buffer.from(await request.arrayBuffer());
 
     const command = new UploadPartCommand({
       Bucket: bucketName,
