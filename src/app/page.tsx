@@ -40,6 +40,7 @@ export default function Home() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<"newest" | "oldest" | "largest" | "smallest">("newest");
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const router = useRouter();
 
   const handleLogout = async () => {
@@ -64,6 +65,7 @@ export default function Home() {
 
   useEffect(() => {
     fetchFiles();
+    setSelectedItems(new Set());
   }, [currentPath]);
 
   const createFolder = async () => {
@@ -106,6 +108,13 @@ export default function Home() {
     }
   };
 
+  const downloadFolder = (folderName: string) => {
+    const params = new URLSearchParams();
+    params.set("keys", encodeURIComponent(JSON.stringify([])));
+    params.set("prefixes", encodeURIComponent(JSON.stringify([folderName])));
+    window.open(`/api/bulk/download?${params.toString()}`, "_blank");
+  };
+
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -121,23 +130,54 @@ export default function Home() {
     e.stopPropagation();
     setIsDragActive(false);
 
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+    if (e.dataTransfer.items) {
+      const items = Array.from(e.dataTransfer.items);
+      items.forEach(item => {
+        if (item.kind === 'file') {
+          const entry = item.webkitGetAsEntry();
+          if (entry) traverseFileTree(entry);
+        }
+      });
+    } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const filesArray = Array.from(e.dataTransfer.files);
       filesArray.forEach(file => uploadFile(file));
     }
   }, []);
 
-  const uploadFile = async (file: File) => {
+  const traverseFileTree = (item: any, path = "") => {
+    if (item.isFile) {
+      item.file((file: File) => {
+        uploadFile(file, path);
+      });
+    } else if (item.isDirectory) {
+      const dirReader = item.createReader();
+      const readEntries = () => {
+        dirReader.readEntries((entries: any[]) => {
+          if (entries.length > 0) {
+            entries.forEach(entry => {
+              traverseFileTree(entry, path + item.name + "/");
+            });
+            readEntries();
+          }
+        });
+      };
+      readEntries();
+    }
+  };
+
+  const uploadFile = async (file: File, relativePath: string = "") => {
     const filename = file.name;
     const contentType = file.type || "application/octet-stream";
+    const targetPath = currentPath + relativePath;
+    const progressKey = relativePath ? `${relativePath}${filename}` : filename;
 
-    setUploadProgress((prev) => ({ ...prev, [filename]: 0 }));
+    setUploadProgress((prev) => ({ ...prev, [progressKey]: 0 }));
 
     try {
       // 1. Create Multipart Upload
       const createRes = await fetch("/api/upload/multipart/create", {
         method: "POST",
-        body: JSON.stringify({ filename, contentType, path: currentPath }),
+        body: JSON.stringify({ filename, contentType, path: targetPath }),
         headers: { "Content-Type": "application/json" },
       });
       const { uploadId, key, error: createError } = await createRes.json();
@@ -186,7 +226,7 @@ export default function Home() {
               if (!eTag) throw new Error(`No ETag returned for part ${partNumber}. You MUST configure your Minio/S3 CORS policy to ExposeHeaders: ["ETag"]`);
 
               uploadedBytes += chunk.size;
-              setUploadProgress((prev) => ({ ...prev, [filename]: Math.round((uploadedBytes / file.size) * 100) }));
+              setUploadProgress((prev) => ({ ...prev, [progressKey]: Math.round((uploadedBytes / file.size) * 100) }));
 
               return { partNumber, eTag: eTag.replace(/"/g, "") }; // S3 sometimes wraps ETags in quotes
             })()
@@ -212,7 +252,7 @@ export default function Home() {
 
       setUploadProgress((prev) => {
         const newProgress = { ...prev };
-        delete newProgress[filename];
+        delete newProgress[progressKey];
         return newProgress;
       });
 
@@ -221,11 +261,65 @@ export default function Home() {
       console.error("Upload failed", error);
       setUploadProgress((prev) => {
         const newProgress = { ...prev };
-        delete newProgress[filename];
+        delete newProgress[progressKey];
         return newProgress;
       });
       alert(`Upload failed: ${error.message}`);
     }
+  };
+
+  const toggleSelection = (key: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedItems(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    const allKeys = [
+      ...filteredFolders.map(f => f.name),
+      ...sortedAndFilteredFiles.map(f => f.key)
+    ];
+    if (selectedItems.size === allKeys.length && allKeys.length > 0) {
+      setSelectedItems(new Set());
+    } else {
+      setSelectedItems(new Set(allKeys));
+    }
+  };
+
+  const bulkDelete = async () => {
+    if (!confirm(`Are you sure you want to delete ${selectedItems.size} items?`)) return;
+
+    const keys = Array.from(selectedItems).filter(k => !k.endsWith("/"));
+    const prefixes = Array.from(selectedItems).filter(k => k.endsWith("/"));
+
+    try {
+      await fetch("/api/bulk/delete", {
+        method: "POST",
+        body: JSON.stringify({ keys, prefixes }),
+        headers: { "Content-Type": "application/json" },
+      });
+      setSelectedItems(new Set());
+      fetchFiles();
+    } catch (error) {
+      console.error("Bulk delete failed", error);
+      alert("Failed to delete some items");
+    }
+  };
+
+  const bulkDownload = () => {
+    const keys = Array.from(selectedItems).filter(k => !k.endsWith("/"));
+    const prefixes = Array.from(selectedItems).filter(k => k.endsWith("/"));
+
+    const params = new URLSearchParams();
+    params.set("keys", encodeURIComponent(JSON.stringify(keys)));
+    params.set("prefixes", encodeURIComponent(JSON.stringify(prefixes)));
+
+    window.open(`/api/bulk/download?${params.toString()}`, "_blank");
+    setSelectedItems(new Set());
   };
 
   const renameFile = async (oldKey: string, newName: string) => {
@@ -401,16 +495,41 @@ export default function Home() {
                 const filesArray = Array.from(e.target.files);
                 filesArray.forEach(file => uploadFile(file));
               }
+              e.target.value = "";
             }}
           />
-          <label htmlFor="file-upload" className="cursor-pointer flex flex-col items-center justify-center">
+          <input
+            type="file"
+            id="folder-upload"
+            className="hidden"
+            /* @ts-expect-error non-standard attributes */
+            webkitdirectory="true"
+            directory="true"
+            multiple
+            onChange={(e) => {
+              if (e.target.files) {
+                const filesArray = Array.from(e.target.files);
+                filesArray.forEach(file => {
+                  const relativePath = file.webkitRelativePath ? file.webkitRelativePath.substring(0, file.webkitRelativePath.lastIndexOf('/') + 1) : "";
+                  uploadFile(file, relativePath);
+                });
+              }
+              e.target.value = "";
+            }}
+          />
+          <div className="flex flex-col items-center justify-center">
             <UploadCloud className={`w-16 h-16 mb-6 transition-colors ${isDragActive ? "text-blue-400" : "text-slate-400"}`} />
-            <h3 className="text-2xl font-semibold mb-2">Drag & Drop files here</h3>
-            <p className="text-slate-400 mb-6">or click to browse from your computer</p>
-            <span className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-full font-medium transition-all shadow-[0_0_20px_rgba(37,99,235,0.3)] hover:shadow-[0_0_30px_rgba(37,99,235,0.5)]">
-              Select Files
-            </span>
-          </label>
+            <h3 className="text-2xl font-semibold mb-2">Drag & Drop files or folders here</h3>
+            <p className="text-slate-400 mb-6">or click below to browse your computer</p>
+            <div className="flex gap-4">
+              <label htmlFor="file-upload" className="cursor-pointer bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-full font-medium transition-all shadow-[0_0_20px_rgba(37,99,235,0.3)] hover:shadow-[0_0_30px_rgba(37,99,235,0.5)]">
+                Select Files
+              </label>
+              <label htmlFor="folder-upload" className="cursor-pointer bg-slate-700 hover:bg-slate-600 text-white px-6 py-3 rounded-full font-medium transition-all shadow-[0_0_20px_rgba(51,65,85,0.3)] hover:shadow-[0_0_30px_rgba(51,65,85,0.5)] border border-slate-600">
+                Select Folder
+              </label>
+            </div>
+          </div>
         </div>
 
         {/* Upload Progress */}
@@ -424,10 +543,14 @@ export default function Home() {
                   <span className="font-medium truncate max-w-[200px] md:max-w-sm">{filename}</span>
                 </div>
                 <div className="flex items-center gap-4">
-                  <div className="w-32 h-2 bg-slate-800 rounded-full overflow-hidden hidden md:block">
-                    <div className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300" style={{ width: `${progress}%` }} />
+                  <div className="w-32 h-2 bg-slate-800 rounded-full overflow-hidden hidden md:block relative">
+                    {progress === -1 ? (
+                      <div className="absolute inset-0 bg-gradient-to-r from-blue-500 to-purple-500 animate-pulse" />
+                    ) : (
+                      <div className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300" style={{ width: `${progress}%` }} />
+                    )}
                   </div>
-                  <span className="text-sm font-mono">{progress}%</span>
+                  <span className="text-sm font-mono">{progress === -1 ? "Fetching..." : `${progress}%`}</span>
                 </div>
               </div>
             ))}
@@ -448,6 +571,17 @@ export default function Home() {
             >
               <FolderPlus className="w-5 h-5" />
             </button>
+            {(sortedAndFilteredFiles.length > 0 || filteredFolders.length > 0) && (
+              <label className="flex items-center gap-2 cursor-pointer ml-2 text-sm text-slate-400 hover:text-slate-200 transition-colors">
+                <input 
+                  type="checkbox" 
+                  className="w-4 h-4 rounded border-slate-600 bg-slate-800 accent-blue-500"
+                  checked={selectedItems.size > 0 && selectedItems.size === sortedAndFilteredFiles.length + filteredFolders.length}
+                  onChange={toggleAll}
+                />
+                Select All
+              </label>
+            )}
           </div>
           <div className="flex flex-col sm:flex-row w-full md:w-auto gap-4">
             <div className="flex bg-slate-800/50 rounded-full border border-slate-600/50 p-1">
@@ -508,10 +642,20 @@ export default function Home() {
               {filteredFolders.map((folder) => (
                 <div 
                   key={folder.name} 
-                  className={`glass group transition-all cursor-pointer relative overflow-hidden ${viewMode === "grid" ? "rounded-2xl p-6 flex flex-col justify-between h-48 hover:scale-[1.02]" : "rounded-xl p-3 sm:p-4 flex flex-wrap sm:flex-nowrap items-center gap-4 hover:bg-slate-800/50"}`} 
+                  className={`glass group transition-all cursor-pointer relative overflow-hidden ${viewMode === "grid" ? "rounded-2xl p-6 flex flex-col justify-between h-48 hover:scale-[1.02]" : "rounded-xl p-3 sm:p-4 flex flex-wrap sm:flex-nowrap items-center gap-4 hover:bg-slate-800/50"} ${selectedItems.has(folder.name) ? 'ring-2 ring-blue-500 bg-blue-500/10' : ''}`} 
                   onClick={() => setCurrentPath(folder.name)}
                 >
                   <div className={viewMode === "grid" ? "" : "flex items-center gap-4 flex-1 min-w-0"}>
+                    {viewMode === "grid" && (
+                      <div className="absolute top-4 left-4 z-30" onClick={(e) => e.stopPropagation()}>
+                        <input type="checkbox" className={`w-5 h-5 rounded border-slate-600 bg-slate-800 accent-blue-500 cursor-pointer transition-opacity ${selectedItems.has(folder.name) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`} checked={selectedItems.has(folder.name)} onChange={(e) => toggleSelection(folder.name, e as any)} />
+                      </div>
+                    )}
+                    {viewMode === "list" && (
+                      <div className="z-30 flex items-center" onClick={(e) => e.stopPropagation()}>
+                        <input type="checkbox" className="w-5 h-5 rounded border-slate-600 bg-slate-800 accent-blue-500 cursor-pointer" checked={selectedItems.has(folder.name)} onChange={(e) => toggleSelection(folder.name, e as any)} />
+                      </div>
+                    )}
                     <Folder className={`text-blue-400 fill-blue-400/20 ${viewMode === "grid" ? "w-10 h-10 mb-4" : "w-6 h-6 flex-shrink-0"}`} />
                     <h4 className={`font-semibold truncate ${viewMode === "grid" ? "text-lg pr-16" : "text-sm"}`} title={folder.name.split("/").filter(Boolean).pop()}>
                       {folder.name.split("/").filter(Boolean).pop()}
@@ -524,6 +668,13 @@ export default function Home() {
                   </div>
 
                   <div className={viewMode === "grid" ? "absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2 z-20" : "opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 z-20 w-full sm:w-auto justify-end mt-2 sm:mt-0"}>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); downloadFolder(folder.name); }}
+                      className={viewMode === "grid" ? "p-2 bg-blue-500/20 hover:bg-blue-500/40 text-blue-300 rounded-full backdrop-blur-md transition-colors" : "p-1.5 bg-blue-500/20 hover:bg-blue-500/40 text-blue-300 rounded-md transition-colors"}
+                      title="Download Folder as ZIP"
+                    >
+                      <Download className="w-4 h-4" />
+                    </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); deleteFolder(folder.name); }}
                       className={viewMode === "grid" ? "p-2 bg-red-500/20 hover:bg-red-500/40 text-red-300 rounded-full backdrop-blur-md transition-colors" : "p-1.5 bg-red-500/20 hover:bg-red-500/40 text-red-300 rounded-md transition-colors"}
@@ -539,9 +690,19 @@ export default function Home() {
               {sortedAndFilteredFiles.map((file) => (
                 <div 
                   key={file.key} 
-                  className={`glass group transition-all relative overflow-hidden ${viewMode === "grid" ? "rounded-2xl p-6 flex flex-col justify-between h-48 hover:scale-[1.02]" : "rounded-xl p-3 sm:p-4 flex flex-wrap sm:flex-nowrap items-center gap-4 hover:bg-slate-800/50"}`}
+                  className={`glass group transition-all relative overflow-hidden ${viewMode === "grid" ? "rounded-2xl p-6 flex flex-col justify-between h-48 hover:scale-[1.02]" : "rounded-xl p-3 sm:p-4 flex flex-wrap sm:flex-nowrap items-center gap-4 hover:bg-slate-800/50"} ${selectedItems.has(file.key) ? 'ring-2 ring-blue-500 bg-blue-500/10' : ''}`}
                 >
                   <div className={viewMode === "grid" ? "" : "flex items-center gap-4 flex-1 min-w-0"}>
+                    {viewMode === "grid" && (
+                      <div className="absolute top-4 left-4 z-30" onClick={(e) => e.stopPropagation()}>
+                        <input type="checkbox" className={`w-5 h-5 rounded border-slate-600 bg-slate-800 accent-blue-500 cursor-pointer transition-opacity ${selectedItems.has(file.key) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`} checked={selectedItems.has(file.key)} onChange={(e) => toggleSelection(file.key, e as any)} />
+                      </div>
+                    )}
+                    {viewMode === "list" && (
+                      <div className="z-30 flex items-center" onClick={(e) => e.stopPropagation()}>
+                        <input type="checkbox" className="w-5 h-5 rounded border-slate-600 bg-slate-800 accent-blue-500 cursor-pointer" checked={selectedItems.has(file.key)} onChange={(e) => toggleSelection(file.key, e as any)} />
+                      </div>
+                    )}
                     <File className={`text-purple-400 ${viewMode === "grid" ? "w-10 h-10 mb-4" : "w-6 h-6 flex-shrink-0"}`} />
                     {editingKey === file.key ? (
                       <div className={`flex items-center gap-2 relative z-30 ${viewMode === "grid" ? "pr-16" : "flex-1"}`}>
@@ -594,6 +755,28 @@ export default function Home() {
           )}
         </div>
       </div>
+
+      {/* Floating Action Bar for Bulk Selection */}
+      {selectedItems.size > 0 && (
+        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-40 glass px-6 py-4 rounded-full border-blue-500/50 shadow-[0_0_30px_rgba(37,99,235,0.2)] flex items-center gap-6 animate-in slide-in-from-bottom-10 fade-in duration-300">
+          <span className="font-semibold text-white">
+            {selectedItems.size} item{selectedItems.size > 1 ? 's' : ''} selected
+          </span>
+          <div className="flex items-center gap-3">
+            <button onClick={bulkDownload} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-full font-medium transition-colors shadow-sm">
+              <Download className="w-4 h-4" />
+              Download
+            </button>
+            <button onClick={bulkDelete} className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-full font-medium transition-colors shadow-sm">
+              <Trash2 className="w-4 h-4" />
+              Delete
+            </button>
+            <button onClick={() => setSelectedItems(new Set())} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-full transition-colors" title="Clear selection">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Preview Modal */}
       {previewUrl && (
