@@ -386,13 +386,16 @@ export default function Home() {
 
           batch.push(
             (async () => {
-              const arrayBuffer = await chunk.arrayBuffer();
               const uploadRes = await fetch(presignedUrl, {
                 method: "PUT",
-                body: arrayBuffer,
+                body: chunk,
               });
 
-              if (!uploadRes.ok) throw new Error(`Failed to upload part ${partNumber}`);
+              if (!uploadRes.ok) {
+                const errorText = await uploadRes.text().catch(() => "No error text available");
+                console.error(`Upload part ${partNumber} failed with status ${uploadRes.status}:`, errorText);
+                throw new Error(`Failed to upload part ${partNumber}: ${uploadRes.status} - ${errorText.substring(0, 100)}`);
+              }
 
               const eTag = uploadRes.headers.get("ETag") || uploadRes.headers.get("etag");
               if (!eTag) throw new Error(`No ETag returned for part ${partNumber}. You MUST configure your Minio/S3 CORS policy to ExposeHeaders: ["ETag"]`);
