@@ -6,6 +6,7 @@ import { partial } from "filesize";
 import { UploadCloud, File, Trash2, Download, Loader2, Pencil, Check, X, Eye, Share2, Search, LogOut, Folder, FolderPlus, ChevronRight, LayoutGrid, List, FolderOutput } from "lucide-react";
 import { useRouter } from "next/navigation";
 import Editor from "@monaco-editor/react";
+import Image from "next/image";
 
 const sizeFormatter = partial({ standard: "jedec" });
 
@@ -24,6 +25,11 @@ const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
 function getCleanFileName(key: string) {
   const uuidRegex = /-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=\.[^.]+$|$)/i;
   return key.replace(uuidRegex, '');
+}
+
+function isImageFile(key: string) {
+  const ext = key.split('.').pop()?.toLowerCase();
+  return ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext || '');
 }
 
 function FolderSizeIndicator({ prefix, viewMode }: { prefix: string, viewMode: "grid" | "list" }) {
@@ -972,7 +978,19 @@ export default function Home() {
                         <input type="checkbox" className="w-5 h-5 rounded border-slate-600 bg-slate-800 accent-blue-500 cursor-pointer" checked={selectedItems.has(file.key)} onChange={(e) => toggleSelection(file.key, e as any)} />
                       </div>
                     )}
-                    <File className={`text-purple-400 ${viewMode === "grid" ? "w-10 h-10 mb-4" : "w-6 h-6 flex-shrink-0"}`} />
+                    {isImageFile(file.key) ? (
+                      <div className={`relative overflow-hidden rounded-md shadow-sm border border-slate-700/50 ${viewMode === "grid" ? "w-12 h-12 mb-4" : "w-6 h-6 flex-shrink-0"}`}>
+                        <Image 
+                          src={`/api/media?key=${encodeURIComponent(file.key)}`}
+                          alt={file.key}
+                          fill
+                          className="object-cover"
+                          unoptimized={false}
+                        />
+                      </div>
+                    ) : (
+                      <File className={`text-purple-400 ${viewMode === "grid" ? "w-10 h-10 mb-4" : "w-6 h-6 flex-shrink-0"}`} />
+                    )}
                     {editingKey === file.key ? (
                       <div className={`flex items-center gap-2 relative z-30 ${viewMode === "grid" ? "pr-16" : "flex-1"}`}>
                         <input
