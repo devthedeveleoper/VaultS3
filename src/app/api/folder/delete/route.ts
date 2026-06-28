@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     let continuationToken: string | undefined = undefined;
 
     while (isTruncated) {
-      const listCommand: ListObjectsV2Command = new ListObjectsV2Command({
+      const listCommand: any = new ListObjectsV2Command({
         Bucket: bucketName,
         Prefix: folderPrefix,
         ContinuationToken: continuationToken,
