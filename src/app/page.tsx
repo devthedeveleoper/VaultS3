@@ -358,7 +358,7 @@ export default function Home() {
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
       const uploadedParts: { partNumber: number; eTag: string }[] = [];
       let uploadedBytes = 0;
-      const BATCH_SIZE = 4; // Upload 4 chunks concurrently
+      const BATCH_SIZE = 2; // Upload 2 chunks concurrently to avoid overwhelming dev server RAM
 
       for (let i = 0; i < totalChunks; i += BATCH_SIZE) {
         const batch = [];
@@ -372,15 +372,9 @@ export default function Home() {
 
           batch.push(
             (async () => {
-              const formData = new FormData();
-              formData.append("key", key);
-              formData.append("uploadId", uploadId);
-              formData.append("partNumber", partNumber.toString());
-              formData.append("chunk", chunk);
-
-              const uploadRes = await fetch("/api/upload/multipart/chunk", {
+              const uploadRes = await fetch(`/api/upload/multipart/chunk?key=${encodeURIComponent(key)}&uploadId=${encodeURIComponent(uploadId)}&partNumber=${partNumber}`, {
                 method: "POST",
-                body: formData,
+                body: chunk,
               });
 
               if (!uploadRes.ok) throw new Error(`Failed to upload part ${partNumber}`);
