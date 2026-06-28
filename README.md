@@ -33,7 +33,41 @@ VaultS3 is a modern, minimalist web interface for managing S3-compatible object 
 
 ## Getting Started
 
-First, install the dependencies:
+### 1. Environment Variables
+
+Create a `.env.local` file in the root of the project with the following keys. You can copy the template from `.env.example`:
+
+```env
+MINIO_ENDPOINT=http://localhost:9000
+MINIO_ACCESS_KEY=admin
+MINIO_SECRET_KEY=password
+MINIO_BUCKET_NAME=my-bucket
+APP_PASSWORD=secret
+```
+
+- **`MINIO_ENDPOINT`**: The URL to your S3/Minio instance.
+- **`APP_PASSWORD`**: The password required to log into the web dashboard.
+
+### 2. Configure Storage CORS
+
+Because VaultS3 uploads large files directly from your browser to your storage bucket (to save backend bandwidth), your storage provider MUST allow Cross-Origin Requests. 
+
+Set your bucket's CORS policy to:
+```json
+[
+  {
+    "AllowedHeaders": ["*"],
+    "AllowedMethods": ["GET", "PUT", "POST", "DELETE", "HEAD"],
+    "AllowedOrigins": ["*"],
+    "ExposeHeaders": ["ETag"]
+  }
+]
+```
+*(If using self-hosted MinIO, you can set this globally via the MinIO CLI: `mc admin config set myminio api cors_allow_origin="*"`)*
+
+### 3. Install & Run
+
+Install the dependencies:
 
 ```bash
 npm install
