@@ -921,7 +921,7 @@ export default function Home() {
                   <div className={viewMode === "grid" ? "" : "flex items-center gap-4 flex-1 min-w-0"}>
                     {viewMode === "grid" && (
                       <div className="absolute top-4 left-4 z-30" onClick={(e) => e.stopPropagation()}>
-                        <input type="checkbox" className={`w-5 h-5 rounded border-slate-600 bg-slate-800 accent-blue-500 cursor-pointer transition-opacity ${selectedItems.has(folder.name) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`} checked={selectedItems.has(folder.name)} onChange={(e) => toggleSelection(folder.name, e as any)} />
+                        <input type="checkbox" className={`w-5 h-5 rounded border-slate-600 bg-slate-800 accent-blue-500 cursor-pointer transition-opacity opacity-100`} checked={selectedItems.has(folder.name)} onChange={(e) => toggleSelection(folder.name, e as any)} />
                       </div>
                     )}
                     {viewMode === "list" && (
@@ -937,7 +937,7 @@ export default function Home() {
                   
                   <FolderSizeIndicator prefix={folder.name} viewMode={viewMode} />
 
-                  <div className={viewMode === "grid" ? "absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2 z-20" : "opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 z-20 w-full sm:w-auto justify-end mt-2 sm:mt-0"}>
+                  <div className={viewMode === "grid" ? "absolute top-0 right-0 p-4 flex gap-2 z-20" : "flex gap-1 z-20 w-full sm:w-auto justify-end mt-2 sm:mt-0"}>
                     <button
                       onClick={(e) => { e.stopPropagation(); downloadFolder(folder.name); }}
                       className={viewMode === "grid" ? "p-2 bg-blue-500/20 hover:bg-blue-500/40 text-blue-300 rounded-full backdrop-blur-md transition-colors" : "p-1.5 bg-blue-500/20 hover:bg-blue-500/40 text-blue-300 rounded-md transition-colors"}
@@ -971,7 +971,7 @@ export default function Home() {
                   <div className={viewMode === "grid" ? "" : "flex items-center gap-4 flex-1 min-w-0"}>
                     {viewMode === "grid" && (
                       <div className="absolute top-4 left-4 z-30" onClick={(e) => e.stopPropagation()}>
-                        <input type="checkbox" className={`w-5 h-5 rounded border-slate-600 bg-slate-800 accent-blue-500 cursor-pointer transition-opacity ${selectedItems.has(file.key) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`} checked={selectedItems.has(file.key)} onChange={(e) => toggleSelection(file.key, e as any)} />
+                        <input type="checkbox" className={`w-5 h-5 rounded border-slate-600 bg-slate-800 accent-blue-500 cursor-pointer transition-opacity opacity-100`} checked={selectedItems.has(file.key)} onChange={(e) => toggleSelection(file.key, e as any)} />
                       </div>
                     )}
                     {viewMode === "list" && (
@@ -1020,7 +1020,7 @@ export default function Home() {
                     <span className={viewMode === "list" ? "w-24 text-left truncate" : ""}>{format(new Date(file.lastModified), "MMM dd")}</span>
                   </div>
 
-                  <div className={viewMode === "grid" ? "absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2 z-20" : "opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 z-20 w-full sm:w-auto justify-end mt-2 sm:mt-0"}>
+                  <div className={viewMode === "grid" ? "absolute top-0 right-0 p-4 flex gap-2 z-20" : "flex gap-1 z-20 w-full sm:w-auto justify-end mt-2 sm:mt-0"}>
                     <button onClick={() => previewFile(file.key)} className={viewMode === "grid" ? "p-2 bg-emerald-500/20 hover:bg-emerald-500/40 text-emerald-300 rounded-full" : "p-1.5 bg-emerald-500/20 hover:bg-emerald-500/40 text-emerald-300 rounded-md"} title="Preview">
                       <Eye className="w-4 h-4" />
                     </button>
