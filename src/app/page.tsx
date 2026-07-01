@@ -4,9 +4,11 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { format } from "date-fns";
 import { partial } from "filesize";
 import { UploadCloud, File, Trash2, Download, Loader2, Pencil, Check, X, Eye, Share2, Search, LogOut, Folder, FolderPlus, ChevronRight, LayoutGrid, List, FolderOutput } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 import Editor from "@monaco-editor/react";
 import Image from "next/image";
+import Player from "next-video/player";
 
 const sizeFormatter = partial({ standard: "jedec" });
 
@@ -75,10 +77,22 @@ function FolderSizeIndicator({ prefix, viewMode }: { prefix: string, viewMode: "
   );
 }
 
-export default function Home() {
+function FileBrowserContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const currentPath = searchParams?.get("path") || "";
+  
+  const setCurrentPath = (newPath: string | ((prev: string) => string)) => {
+    const pathValue = typeof newPath === 'function' ? newPath(currentPath) : newPath;
+    if (pathValue === "") {
+      router.push("/");
+    } else {
+      router.push(`/?path=${encodeURIComponent(pathValue)}`);
+    }
+  };
+
   const [files, setFiles] = useState<FileObject[]>([]);
   const [folders, setFolders] = useState<FolderObject[]>([]);
-  const [currentPath, setCurrentPath] = useState("");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [isDragActive, setIsDragActive] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ [key: string]: number }>({});
@@ -105,7 +119,6 @@ export default function Home() {
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [searchResults, setSearchResults] = useState<{ files: FileObject[], folders: FolderObject[] } | null>(null);
   const [isSearching, setIsSearching] = useState(false);
-  const router = useRouter();
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const displayFiles = searchResults ? searchResults.files : files;
@@ -1189,7 +1202,15 @@ export default function Home() {
             </button>
 
             {previewType === 'image' && <img src={previewUrl} alt="Preview" className="max-w-full max-h-[80vh] object-contain rounded-xl" />}
-            {previewType === 'video' && <video src={previewUrl} controls className="max-w-full max-h-[80vh] rounded-xl outline-none" autoPlay />}
+            {previewType === 'video' && (
+              <div className="w-full max-w-4xl rounded-xl overflow-hidden shadow-2xl">
+                <Player 
+                  src={previewUrl} 
+                  autoPlay 
+                  className="w-full max-h-[80vh] outline-none" 
+                />
+              </div>
+            )}
             {previewType === 'pdf' && <iframe src={previewUrl} className="w-full h-[80vh] rounded-xl bg-white border-0" />}
             {previewType === 'code' && (
               <div className="w-full h-[80vh] bg-[#1e1e1e] rounded-xl overflow-hidden flex flex-col">
@@ -1238,5 +1259,17 @@ export default function Home() {
         </div>
       )}
     </main>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a]">
+        <Loader2 className="w-12 h-12 text-blue-500 animate-spin" />
+      </div>
+    }>
+      <FileBrowserContent />
+    </Suspense>
   );
 }
